@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X422 — 24/7 AI Hub</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#0b0f19;color:#e2e8f0;padding:1.5rem}
+.c{max-width:860px;margin:0 auto 1rem;background:#131a2a;border:1px solid #23304d;border-radius:12px;padding:1.2rem}
+h1{margin:0 0 .4rem;font-size:1.5rem}.b{background:#14532d;color:#4ade80;padding:.2rem .6rem;border-radius:99px;font-size:.75rem}
+input,button{padding:.6rem .8rem;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font:inherit}
+button{background:#0284c7;border-color:#38bdf8;cursor:pointer;font-weight:600}
+pre{background:#080c15;padding:.9rem;border-radius:8px;overflow:auto;color:#bae6fd;font-size:.82rem}a{color:#38bdf8}</style>
+</head><body>
+<div class="c"><h1>X422 24/7 AI Hub <span class="b">ONLINE</span></h1><div id="m">Loading...</div></div>
+<div class="c"><h3>Verify Key / Password</h3>
+<input id="s" type="password" placeholder="API Key or Password" style="width:65%"> <button onclick="v()">Verify</button>
+<p id="o"></p></div>
+<div class="c"><h3>Live 24/7 JSON Endpoints</h3>
+<p><a href="./api/status.json">status.json</a> | <a href="./api/kv.json">kv.json</a> | <a href="./api/inbox.json">inbox.json</a> | <a href="./api/auth.json">auth.json</a></p>
+<pre id="j">Loading...</pre></div>
+<script>
+async function h(t){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function load(){const t=performance.now();const[s,k,i]=await Promise.all(["status","kv","inbox"].map(n=>fetch("./api/"+n+".json?t="+Date.now()).then(r=>r.json())));
+document.getElementById("m").textContent="Latency: "+(performance.now()-t).toFixed(1)+" ms | Runs: "+s.run_count+" | Updated: "+s.last_updated_utc;
+document.getElementById("j").textContent=JSON.stringify({status:s,kv:k,inbox:i},null,2)}
+async function v(){const x=document.getElementById("s").value.trim(),a=await(await fetch("./api/auth.json")).json(),g=await h(a.salt+":"+x);
+document.getElementById("o").innerHTML=g===a.api_key_sha256?"<b style=color:#4ade80>AUTHENTICATED (API Key)</b>":g===a.password_sha256?"<b style=color:#4ade80>AUTHENTICATED (Password)</b>":"<b style=color:#f87171>UNAUTHORIZED</b>"}
+load();
+</script></body></html>

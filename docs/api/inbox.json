@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "id": "msg-init",
+      "from": "system",
+      "text": "X422 Ready",
+      "timestamp_utc": "2026-11-22T13:48:51Z"
+    }
+  ]
+}
