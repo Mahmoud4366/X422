@@ -1,0 +1,206 @@
+name: X422 AI Hub
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ai-hub.yml"
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "ping | kv_set | kv_delete | send_msg | hash"
+        required: true
+        default: "ping"
+      api_key:
+        description: "X422 API Key"
+        required: false
+        default: ""
+      password:
+        description: "X422 Password"
+        required: false
+        default: ""
+      kv_key:
+        description: "Key name (for kv_set / kv_delete)"
+        required: false
+        default: ""
+      payload:
+        description: "Value / Message / Text"
+        required: false
+        default: ""
+      sender:
+        description: "Calling AI name"
+        required: false
+        default: "linux-ai"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "x422-hub"
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run X422 Hub Engine
+        env:
+          HUB_ACTION: ${{ inputs.action || 'heartbeat' }}
+          HUB_API_KEY: ${{ inputs.api_key }}
+          HUB_PASSWORD: ${{ inputs.password }}
+          HUB_KV_KEY: ${{ inputs.kv_key }}
+          HUB_PAYLOAD: ${{ inputs.payload }}
+          HUB_SENDER: ${{ inputs.sender || 'linux-ai' }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, hmac, json, os, sys, time
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          SALT = "9036cf235df5d11f3b676da9aca8619c"
+          KEY_HASH = "d0cbd9e76ef60d0b855941d3bba865a4fe6a6f931f0584e68c70af366311e7a1"
+          PWD_HASH = "e075aeb0a8af00597ad38c0308f3279be1bf35290fb520d13e6d8688b7c262f5"
+
+          t0 = time.perf_counter_ns()
+          now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          docs = Path("docs")
+          api = docs / "api"
+          api.mkdir(parents=True, exist_ok=True)
+
+          def load_j(p, d):
+              return json.loads(p.read_text("utf-8")) if p.exists() else d
+
+          def save_j(p, data):
+              p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", "utf-8")
+
+          def ok_secret(val, expected):
+              if not val:
+                  return False
+              got = hashlib.sha256(f"{SALT}:{val}".encode()).hexdigest()
+              return hmac.compare_digest(got, expected)
+
+          event = os.environ.get("GITHUB_EVENT_NAME", "local")
+          action = (os.environ.get("HUB_ACTION") or "heartbeat").strip().lower()
+          k = (os.environ.get("HUB_API_KEY") or "").strip()
+          p = (os.environ.get("HUB_PASSWORD") or "").strip()
+          kv_key = (os.environ.get("HUB_KV_KEY") or "").strip()
+          payload = os.environ.get("HUB_PAYLOAD") or ""
+          sender = (os.environ.get("HUB_SENDER") or "linux-ai").strip()
+
+          if event == "workflow_dispatch":
+              k_ok = ok_secret(k, KEY_HASH)
+              p_ok = ok_secret(p, PWD_HASH)
+              if not (k_ok or p_ok):
+                  print("ERROR: Unauthorized (invalid api_key or password)", file=sys.stderr)
+                  sys.exit(1)
+              auth = "api_key+password" if (k_ok and p_ok) else ("api_key" if k_ok else "password")
+          else:
+              auth = f"internal:{event}"
+
+          save_j(api / "auth.json", {
+              "algorithm": "sha256(salt + ':' + secret)",
+              "salt": SALT,
+              "api_key_sha256": KEY_HASH,
+              "password_sha256": PWD_HASH,
+          })
+
+          kv = load_j(api / "kv.json", {"welcome": {"value": "X422 24/7 AI Hub Active", "updated_utc": now}})
+          inbox = load_j(api / "inbox.json", {"messages": [{"id": "msg-init", "from": "system", "text": "X422 Ready", "timestamp_utc": now}]})
+          out = {"action": action, "auth": auth, "timestamp_utc": now}
+
+          if action == "kv_set":
+              if not kv_key:
+                  print("ERROR: kv_key required", file=sys.stderr); sys.exit(1)
+              kv[kv_key] = {"value": payload, "updated_utc": now, "by": sender}
+          elif action == "kv_delete":
+              out["deleted"] = kv.pop(kv_key, None) is not None
+          elif action == "send_msg":
+              inbox.setdefault("messages", []).append({"id": f"msg-{int(time.time()*1000)}", "from": sender, "text": payload, "timestamp_utc": now})
+              inbox["messages"] = inbox["messages"][-100:]
+          elif action == "hash":
+              out["sha256"] = hashlib.sha256(payload.encode()).hexdigest()
+              out["base64"] = base64.b64encode(payload.encode()).decode()
+              save_j(api / "last_result.json", out)
+          elif action not in ("ping", "heartbeat"):
+              print(f"ERROR: unknown action {action}", file=sys.stderr); sys.exit(1)
+
+          save_j(api / "kv.json", kv)
+          save_j(api / "inbox.json", inbox)
+
+          ms = round((time.perf_counter_ns() - t0) / 1e6, 3)
+          st = load_j(api / "status.json", {})
+          st.update({
+              "service": "X422-AI-Hub",
+              "status": "online",
+              "uptime_24_7": True,
+              "last_action": action,
+              "last_auth": auth,
+              "last_exec_ms": ms,
+              "last_updated_utc": now,
+              "run_count": int(st.get("run_count", 0)) + 1,
+          })
+          save_j(api / "status.json", st)
+
+          (docs / "index.html").write_text("""<!doctype html>
+          <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>X422 — 24/7 AI Hub</title>
+          <style>body{margin:0;font-family:system-ui,sans-serif;background:#0b0f19;color:#e2e8f0;padding:1.5rem}
+          .c{max-width:860px;margin:0 auto 1rem;background:#131a2a;border:1px solid #23304d;border-radius:12px;padding:1.2rem}
+          h1{margin:0 0 .4rem;font-size:1.5rem}.b{background:#14532d;color:#4ade80;padding:.2rem .6rem;border-radius:99px;font-size:.75rem}
+          input,button{padding:.6rem .8rem;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font:inherit}
+          button{background:#0284c7;border-color:#38bdf8;cursor:pointer;font-weight:600}
+          pre{background:#080c15;padding:.9rem;border-radius:8px;overflow:auto;color:#bae6fd;font-size:.82rem}a{color:#38bdf8}</style>
+          </head><body>
+          <div class="c"><h1>X422 24/7 AI Hub <span class="b">ONLINE</span></h1><div id="m">Loading...</div></div>
+          <div class="c"><h3>Verify Key / Password</h3>
+          <input id="s" type="password" placeholder="API Key or Password" style="width:65%"> <button onclick="v()">Verify</button>
+          <p id="o"></p></div>
+          <div class="c"><h3>Live 24/7 JSON Endpoints</h3>
+          <p><a href="./api/status.json">status.json</a> | <a href="./api/kv.json">kv.json</a> | <a href="./api/inbox.json">inbox.json</a> | <a href="./api/auth.json">auth.json</a></p>
+          <pre id="j">Loading...</pre></div>
+          <script>
+          async function h(t){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+          async function load(){const t=performance.now();const[s,k,i]=await Promise.all(["status","kv","inbox"].map(n=>fetch("./api/"+n+".json?t="+Date.now()).then(r=>r.json())));
+          document.getElementById("m").textContent="Latency: "+(performance.now()-t).toFixed(1)+" ms | Runs: "+s.run_count+" | Updated: "+s.last_updated_utc;
+          document.getElementById("j").textContent=JSON.stringify({status:s,kv:k,inbox:i},null,2)}
+          async function v(){const x=document.getElementById("s").value.trim(),a=await(await fetch("./api/auth.json")).json(),g=await h(a.salt+":"+x);
+          document.getElementById("o").innerHTML=g===a.api_key_sha256?"<b style=color:#4ade80>AUTHENTICATED (API Key)</b>":g===a.password_sha256?"<b style=color:#4ade80>AUTHENTICATED (Password)</b>":"<b style=color:#f87171>UNAUTHORIZED</b>"}
+          load();
+          </script></body></html>
+          """, "utf-8")
+          print(json.dumps({"ok": True, "exec_ms": ms, **out}, indent=2))
+          PY
+
+      - name: Commit state
+        run: |
+          git config user.name "x422-ai-hub[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          if ! git diff --cached --quiet; then
+            git commit -m "hub: ${{ inputs.action || github.event_name }} [skip ci]"
+            git push
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
